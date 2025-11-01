@@ -104,6 +104,7 @@ HikvisionDriver::HikvisionDriver(const rclcpp::NodeOptions &options)
     declare_parameter<std::string>("camera_name");
     declare_parameter<double>("exposure_time", 10000.0);
     declare_parameter<double>("gain", 16.0);
+    
 
     pImpl->camera_name = get_parameter("camera_name").as_string();
     double exposure_time = get_parameter("exposure_time").as_double();
