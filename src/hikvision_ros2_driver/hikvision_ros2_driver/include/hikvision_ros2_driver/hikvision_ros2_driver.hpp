@@ -14,6 +14,8 @@ class HikvisionDriver : public rclcpp::Node {
    private:
     struct Impl;
     std::unique_ptr<Impl> pImpl;
+
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 };
 
 }  // namespace hikvision_ros2_driver

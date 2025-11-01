@@ -99,9 +99,16 @@ HikvisionDriver::HikvisionDriver(const rclcpp::NodeOptions &options)
     : rclcpp::Node("hikvision_ros2_driver_node", options), pImpl(std::make_unique<Impl>()) {
     auto logger = get_logger();
     pImpl->logger = std::make_unique<rclcpp::Logger>(logger);
-
+    
+    // declare parameters
     declare_parameter<std::string>("camera_name");
+    declare_parameter<double>("exposure_time", 10000.0);
+    declare_parameter<double>("gain", 16.0);
+
     pImpl->camera_name = get_parameter("camera_name").as_string();
+    double exposure_time = get_parameter("exposure_time").as_double();
+    double gain = get_parameter("gain").as_double();
+    
     RCLCPP_INFO(logger, "trying to open camera: '%s'", pImpl->camera_name.c_str());
 
     rclcpp::QoS qos(1);
@@ -134,9 +141,19 @@ HikvisionDriver::HikvisionDriver(const rclcpp::NodeOptions &options)
         } else {
             RCLCPP_WARN(logger, "type(%d) not support", pDeviceInfo->nTLayerType);
         }
+
         if (pUserDefinedName == pImpl->camera_name) {
             MV_CHECK(logger, MV_CC_CreateHandle, &pImpl->handle, pDeviceInfo);
             MV_CHECK(logger, MV_CC_OpenDevice, pImpl->handle);
+
+            // set parameter
+            MV_CHECK(logger, MV_CC_SetEnumValue, pImpl->handle, "ExposureAuto", 0);
+            MV_CHECK(logger, MV_CC_SetFloatValue, pImpl->handle, "ExposureTime", exposure_time);
+
+            MV_CHECK(logger, MV_CC_SetEnumValue, pImpl->handle, "GainAuto", 0);
+            MV_CHECK(logger, MV_CC_SetFloatValue, pImpl->handle, "Gain", gain);
+            // end set
+
             MV_CHECK(logger, MV_CC_RegisterImageCallBackEx, pImpl->handle, &HikvisionDriver::Impl::image_callback_ex,
                      this);
             MV_CHECK(logger, MV_CC_StartGrabbing, pImpl->handle);
@@ -146,6 +163,26 @@ HikvisionDriver::HikvisionDriver(const rclcpp::NodeOptions &options)
     if (pImpl->handle == nullptr) {
         RCLCPP_ERROR(logger, "camera '%s' not found", pImpl->camera_name.c_str());
     }
+
+    param_callback_handle_ = this->add_on_set_parameters_callback(
+    [this](const std::vector<rclcpp::Parameter> &params)
+    -> rcl_interfaces::msg::SetParametersResult {
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+        result.reason = "success";
+
+        for (const auto &param : params) {
+            if (!pImpl->handle) continue;
+            if (param.get_name() == "exposure_time") {
+                MV_CC_SetFloatValue(pImpl->handle, "ExposureTime", param.as_double());
+                RCLCPP_INFO(get_logger(), "ExposureTime updated: %.2f", param.as_double());
+            } else if (param.get_name() == "gain") {
+                MV_CC_SetFloatValue(pImpl->handle, "Gain", param.as_double());
+                RCLCPP_INFO(get_logger(), "Gain updated: %.2f", param.as_double());
+            }
+        }
+        return result;
+    });
 }
 
 HikvisionDriver::~HikvisionDriver() {
