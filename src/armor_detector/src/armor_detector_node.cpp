@@ -56,11 +56,11 @@ private:
         // 若是蓝色，直接 inRange
         if (enemy_color_ == "blue") {
             cv::inRange(hsv, lower, upper, mask_);
-        } else if (enemy_color_ != "red") {
+        } else if (enemy_color_ != "red") { // 非法颜色，返回全黑图像
             mask_ = cv::Mat::zeros(frame.size(), CV_8UC1);
         }
 
-        // 使用形态学操作去除噪声
+        // 使用形态学操作去除噪声（可选）
         cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
         cv::morphologyEx(mask_, mask_, cv::MORPH_CLOSE, kernel);
 
@@ -75,25 +75,33 @@ private:
         constexpr int kMaxContourPoints = 10;
         constexpr double kMinContourArea = 30.0;
         for (const auto &contour : contours) {
+            // 若轮廓点数超过kMaxContourPoints，跳过
             if (contour.size() > kMaxContourPoints) {
                 continue;
             }
+
+            // 计算该轮廓的实际面积，小于kMinContourArea，跳过
             double area = cv::contourArea(contour);
             if (area < kMinContourArea) {
                 continue;
             }
 
+            // 拟合该轮廓的“最小外接矩形”
             cv::RotatedRect rect = cv::minAreaRect(contour);
             float width = rect.size.width;
             float height = rect.size.height;
+
+            // 拟合出的矩形异常（宽或高为0），跳过
             if (width <= 0 || height <= 0) {
                 continue;
             }
 
+            // 交换宽高
             if (width > height) {
                 std::swap(width, height);
             }
 
+            // 高宽比范围：1.5 < ratio < 15；超出范围，跳过
             float aspect_ratio = height / width;
             if (aspect_ratio < 1.5f || aspect_ratio > 15.0f) {
                 continue;
@@ -104,6 +112,8 @@ private:
 
         // 计算候选装甲板
         std::vector<cv::RotatedRect> armor_candidates;
+
+        // 统一灯条角度到同一参考方向
         auto normalized_angle = [](const cv::RotatedRect &rect) {
             float angle = rect.angle;
             if (rect.size.width < rect.size.height) {
@@ -112,6 +122,7 @@ private:
             return angle + 90.0f;
         };
 
+        // 两两配对灯条
         for (size_t i = 0; i < lightbars.size(); ++i) {
             for (size_t j = i + 1; j < lightbars.size(); ++j) {
                 const auto &rect1 = lightbars[i];
@@ -123,10 +134,13 @@ private:
                 float height1 = std::max(rect1.size.width, rect1.size.height);
                 float height2 = std::max(rect2.size.width, rect2.size.height);
                 float height_ratio = height1 > height2 ? height1 / height2 : height2 / height1;
+
+                // 两条灯条的高度不能相差超过 1.5 倍
                 if (height_ratio > 1.5f) {
                     continue;
                 }
-
+                
+                // 两灯条方向差 ≤ 15°
                 float angle_diff = std::fabs(normalized_angle(rect1) - normalized_angle(rect2));
                 if (angle_diff > 90.0f) {
                     angle_diff = 180.0f - angle_diff;
@@ -135,6 +149,7 @@ private:
                     continue;
                 }
 
+                // 计算两个灯条中心之间的距离，与它们的平均高度作比例（0.5 < 距离/高度 < 4.0）
                 float center_distance = static_cast<float>(cv::norm(rect1.center - rect2.center));
                 float avg_height = (height1 + height2) / 2.0f;
                 float distance_ratio = center_distance / avg_height;
@@ -142,6 +157,7 @@ private:
                     continue;
                 }
 
+                // 比较两个灯条中心在竖直方向的差距（上下差距 < 0.8 × 平均高度）
                 float vertical_diff = std::fabs(rect1.center.y - rect2.center.y);
                 if (vertical_diff > avg_height * 0.8f) {
                     continue;
