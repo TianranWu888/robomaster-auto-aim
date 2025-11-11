@@ -40,7 +40,7 @@ private:
         cv::Mat hsv;
         cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
 
-        // 根据 enemy_color 选择不同阈值
+        // 根据 enemy_color 选择不同阈值(HSV值待定！！)
         cv::Scalar lower, upper;
         if (enemy_color_ == "blue") {
             lower = cv::Scalar(100, 80, 80);
@@ -60,7 +60,7 @@ private:
             mask_ = cv::Mat::zeros(frame.size(), CV_8UC1);
         }
 
-        // 使用形态学操作去除噪声（可选）
+        // 使用形态学操作去除噪声（可选，方法待定！！）
         cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
         cv::morphologyEx(mask_, mask_, cv::MORPH_CLOSE, kernel);
 
@@ -75,12 +75,12 @@ private:
         constexpr int kMaxContourPoints = 10;
         constexpr double kMinContourArea = 30.0;
         for (const auto &contour : contours) {
-            // 若轮廓点数超过kMaxContourPoints，跳过
+            // 若轮廓点数超过kMaxContourPoints，跳过(kMaxContourPoints值待定！！)
             if (contour.size() > kMaxContourPoints) {
                 continue;
             }
 
-            // 计算该轮廓的实际面积，小于kMinContourArea，跳过
+            // 计算该轮廓的实际面积，小于kMinContourArea，跳过(kMinContourArea值待定！！)
             double area = cv::contourArea(contour);
             if (area < kMinContourArea) {
                 continue;
@@ -101,7 +101,7 @@ private:
                 std::swap(width, height);
             }
 
-            // 高宽比范围：1.5 < ratio < 15；超出范围，跳过
+            // 高宽比范围：1.5 < ratio < 15；超出范围，跳过(ratio的范围值待定！！)
             float aspect_ratio = height / width;
             if (aspect_ratio < 1.5f || aspect_ratio > 15.0f) {
                 continue;
@@ -135,12 +135,12 @@ private:
                 float height2 = std::max(rect2.size.width, rect2.size.height);
                 float height_ratio = height1 > height2 ? height1 / height2 : height2 / height1;
 
-                // 两条灯条的高度不能相差超过 1.5 倍
+                // 两条灯条的高度不能相差超过 1.5 倍(ratio的值待定！！)
                 if (height_ratio > 1.5f) {
                     continue;
                 }
                 
-                // 两灯条方向差 ≤ 15°
+                // 两灯条方向差 ≤ 15°(ratio的值待定！！)
                 float angle_diff = std::fabs(normalized_angle(rect1) - normalized_angle(rect2));
                 if (angle_diff > 90.0f) {
                     angle_diff = 180.0f - angle_diff;
@@ -149,7 +149,7 @@ private:
                     continue;
                 }
 
-                // 计算两个灯条中心之间的距离，与它们的平均高度作比例（0.5 < 距离/高度 < 4.0）
+                // 计算两个灯条中心之间的距离，与它们的平均高度作比例（0.5 < 距离/高度 < 4.0）(ratio的范围值待定！！)
                 float center_distance = static_cast<float>(cv::norm(rect1.center - rect2.center));
                 float avg_height = (height1 + height2) / 2.0f;
                 float distance_ratio = center_distance / avg_height;
@@ -157,7 +157,7 @@ private:
                     continue;
                 }
 
-                // 比较两个灯条中心在竖直方向的差距（上下差距 < 0.8 × 平均高度）
+                // 比较两个灯条中心在竖直方向的差距（上下差距 < 0.8 × 平均高度）(ratio的范围值待定！！)
                 float vertical_diff = std::fabs(rect1.center.y - rect2.center.y);
                 if (vertical_diff > avg_height * 0.8f) {
                     continue;
