@@ -3,6 +3,8 @@
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.hpp>
 #include <opencv2/opencv.hpp>
+#include <algorithm>
+#include <cmath>
 
 using std::placeholders::_1;
 
@@ -54,10 +56,132 @@ private:
         // 若是蓝色，直接 inRange
         if (enemy_color_ == "blue") {
             cv::inRange(hsv, lower, upper, mask_);
+        } else if (enemy_color_ != "red") {
+            mask_ = cv::Mat::zeros(frame.size(), CV_8UC1);
         }
 
-        // 显示
+        // 使用形态学操作去除噪声
+        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+        cv::morphologyEx(mask_, mask_, cv::MORPH_CLOSE, kernel);
+
+        // 寻找轮廓
+        std::vector<std::vector<cv::Point>> contours;
+        cv::Mat contour_input = mask_.clone();
+        cv::findContours(contour_input, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+        // 筛选轮廓并拟合最小外接矩形
+        std::vector<cv::RotatedRect> lightbars;
+        lightbars.reserve(contours.size());
+        constexpr int kMaxContourPoints = 10;
+        constexpr double kMinContourArea = 30.0;
+        for (const auto &contour : contours) {
+            if (contour.size() > kMaxContourPoints) {
+                continue;
+            }
+            double area = cv::contourArea(contour);
+            if (area < kMinContourArea) {
+                continue;
+            }
+
+            cv::RotatedRect rect = cv::minAreaRect(contour);
+            float width = rect.size.width;
+            float height = rect.size.height;
+            if (width <= 0 || height <= 0) {
+                continue;
+            }
+
+            if (width > height) {
+                std::swap(width, height);
+            }
+
+            float aspect_ratio = height / width;
+            if (aspect_ratio < 1.5f || aspect_ratio > 15.0f) {
+                continue;
+            }
+
+            lightbars.emplace_back(rect);
+        }
+
+        // 计算候选装甲板
+        std::vector<cv::RotatedRect> armor_candidates;
+        auto normalized_angle = [](const cv::RotatedRect &rect) {
+            float angle = rect.angle;
+            if (rect.size.width < rect.size.height) {
+                return angle;
+            }
+            return angle + 90.0f;
+        };
+
+        for (size_t i = 0; i < lightbars.size(); ++i) {
+            for (size_t j = i + 1; j < lightbars.size(); ++j) {
+                const auto &rect1 = lightbars[i];
+                const auto &rect2 = lightbars[j];
+
+                const cv::RotatedRect &left = rect1.center.x < rect2.center.x ? rect1 : rect2;
+                const cv::RotatedRect &right = rect1.center.x < rect2.center.x ? rect2 : rect1;
+
+                float height1 = std::max(rect1.size.width, rect1.size.height);
+                float height2 = std::max(rect2.size.width, rect2.size.height);
+                float height_ratio = height1 > height2 ? height1 / height2 : height2 / height1;
+                if (height_ratio > 1.5f) {
+                    continue;
+                }
+
+                float angle_diff = std::fabs(normalized_angle(rect1) - normalized_angle(rect2));
+                if (angle_diff > 90.0f) {
+                    angle_diff = 180.0f - angle_diff;
+                }
+                if (angle_diff > 15.0f) {
+                    continue;
+                }
+
+                float center_distance = static_cast<float>(cv::norm(rect1.center - rect2.center));
+                float avg_height = (height1 + height2) / 2.0f;
+                float distance_ratio = center_distance / avg_height;
+                if (distance_ratio < 0.5f || distance_ratio > 4.0f) {
+                    continue;
+                }
+
+                float vertical_diff = std::fabs(rect1.center.y - rect2.center.y);
+                if (vertical_diff > avg_height * 0.8f) {
+                    continue;
+                }
+
+                // 组合两个灯条的角点用于拟合装甲板
+                cv::Point2f left_pts[4];
+                cv::Point2f right_pts[4];
+                left.points(left_pts);
+                right.points(right_pts);
+
+                std::vector<cv::Point2f> all_points;
+                all_points.reserve(8);
+                all_points.insert(all_points.end(), left_pts, left_pts + 4);
+                all_points.insert(all_points.end(), right_pts, right_pts + 4);
+
+                armor_candidates.emplace_back(cv::minAreaRect(all_points));
+            }
+        }
+
+        // 可视化灯条与装甲板候选
+        cv::Mat visual = frame.clone();
+        for (const auto &rect : lightbars) {
+            cv::Point2f pts[4];
+            rect.points(pts);
+            for (int i = 0; i < 4; ++i) {
+                cv::line(visual, pts[i], pts[(i + 1) % 4], cv::Scalar(0, 255, 255), 1);
+            }
+        }
+
+        for (const auto &rect : armor_candidates) {
+            cv::Point2f pts[4];
+            rect.points(pts);
+            for (int i = 0; i < 4; ++i) {
+                cv::line(visual, pts[i], pts[(i + 1) % 4], cv::Scalar(0, 0, 255), 2);
+            }
+        }
+
         cv::imshow("mask", mask_);
+        cv::imshow("armor_detection", visual);
         cv::waitKey(1);
     }
 
