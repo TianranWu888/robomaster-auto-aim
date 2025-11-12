@@ -1,215 +1,380 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <image_transport/image_transport.hpp>
+#include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include <algorithm>
 #include <cmath>
 
 using std::placeholders::_1;
+using namespace cv;
+using namespace std;
 
-class ArmorDetector : public rclcpp::Node {
+/* ============================================================
+   辅助函数：矫正灯条的角度与宽高
+   ============================================================ */
+RotatedRect& adjustRec(cv::RotatedRect& rec)
+{
+    float& width = rec.size.width;
+    float& height = rec.size.height;
+    float& angle = rec.angle;
+
+    // 规范化角度到 [-90, 90)
+    angle = std::fmod(angle, 180.0f);
+    if (angle >= 90.0f) angle -= 180.0f;
+    if (angle < -90.0f) angle += 180.0f;
+
+    // 如果角度绝对值大于等于 45，则交换宽高并旋转角度 90 度
+    if (angle >= 45.0f){
+        std::swap(width, height);
+        angle -= 90.0f;
+    } else if (angle < -45.0f){
+        std::swap(width, height);
+        angle += 90.0f;
+    }
+    
+    return rec;
+}   
+
+/* ============================================================
+   数据结构定义
+   ============================================================ */
+struct YPAngles {
+    double yaw;
+    double pitch;
+    double distance;
+};
+
+struct ArmorObj {
+    RotatedRect armor;
+    vector<Point2f> edge_vec;
+    double armor_distance;
+};
+
+struct RectParams {
+    double width;
+    double height;
+    Mat rotation;
+};
+
+/* ============================================================
+   ArmorPlate 类
+   ============================================================ */
+class ArmorPlate {
 public:
-    ArmorDetector() : Node("armor_detector_node") {
-        RCLCPP_INFO(this->get_logger(), "Armor Detector Node Started");
+    ArmorPlate() {}
 
-        // 声明参数（enemy_color默认值为 "blue"，可设为"red"）
-        this->declare_parameter<std::string>("enemy_color", "blue");
-        this->get_parameter("enemy_color", enemy_color_);
+    int locate_armor(Mat img);
+    void set_enemy_color(int c) { enemy_color = c; }
+    YPAngles get_target_pitch_yaw();
 
-        // 订阅图像话题
+    // === Getter 接口 ===
+    const Mat& getBinary() const { return binary; }
+    size_t getLightCount() const { return light_infos.size(); }
+
+private:
+    vector<vector<Point>> light_contours;
+    vector<RotatedRect> light_infos;
+    vector<Mat> channels;
+    Mat binary;
+    RotatedRect armor_rect;
+    int enemy_color = 2;  // 2 = red, 1 = blue
+    vector<ArmorObj> armors;
+
+    RectParams recoverRectangleParameters(double aspect, const Vec2d& v1, const Vec2d& v2);
+    double calculateAbsoluteRotationAngle(const Mat& R);
+    YPAngles getYawAndPitch(int pixelX, int pixelY);
+};
+
+/* ============================================================
+   几何恢复（反投影）
+   ============================================================ */
+RectParams ArmorPlate::recoverRectangleParameters(double aspect, const Vec2d &v1, const Vec2d &v2)
+{
+    RectParams params;
+
+    double a = norm(v1);
+    double b = norm(v2);
+    Vec2d u1 = v1 / a;
+    Vec2d u2 = v2 / b;
+    double D = u1.dot(u2);
+
+    double A = (a * a) / (aspect * aspect * b * b);
+    double B = A - 1.0;
+    double disc = B * B + 4 * A * (D * D);
+    if (disc < 0) disc = 0;
+    double sqrt_disc = sqrt(disc);
+    double X1 = (-B + sqrt_disc) / (2 * A);
+    double X2 = (-B - sqrt_disc) / (2 * A);
+    double X = (X1 >= 0 ? X1 : (X2 >= 0 ? X2 : 0));
+
+    double tan_alpha = sqrt(X);
+    double alpha = atan(tan_alpha);
+    double tan_beta = (fabs(tan_alpha) < 1e-6 ? 0.0 : -D / tan_alpha);
+    double beta = atan(tan_beta);
+
+    params.width  = a / cos(alpha);
+    params.height = b / cos(beta);
+
+    Vec3d r0(u1[0] * cos(alpha), u1[1] * cos(alpha), sin(alpha));
+    Vec3d r1(u2[0] * cos(beta),  u2[1] * cos(beta),  sin(beta));
+    Vec3d r2 = r0.cross(r1);
+    r2 /= norm(r2);
+
+    Mat R = (Mat_<double>(3, 3) <<
+        r0[0], r1[0], r2[0],
+        r0[1], r1[1], r2[1],
+        r0[2], r1[2], r2[2]
+    );
+    params.rotation = R;
+    return params;
+}
+
+/* ============================================================
+   计算旋转角度
+   ============================================================ */
+double ArmorPlate::calculateAbsoluteRotationAngle(const Mat& R)
+{
+    double traceR = R.at<double>(0,0)
+                  + R.at<double>(1,1)
+                  + R.at<double>(2,2);
+    double theta = acos((traceR - 1) / 2.0) * 180.0 / CV_PI;
+    return fabs(theta);
+}
+
+/* ============================================================
+   像素 → yaw/pitch
+   ============================================================ */
+YPAngles ArmorPlate::getYawAndPitch(int pixelX, int pixelY)
+{
+    const double imageWidthPixels  = 1440.0;
+    const double physicalWidth     = 0.48;
+    const double imageHeightPixels = 1080.0;
+    const double physicalHeight    = 0.36;
+    const double distance          = 0.6;
+
+    double cx = imageWidthPixels / 2.0;
+    double cy = imageHeightPixels / 2.0;
+    double px = physicalWidth  / imageWidthPixels;
+    double py = physicalHeight / imageHeightPixels;
+
+    double offsetX = (pixelX - cx) * px;
+    double offsetY = (pixelY - cy) * py;
+
+    double yawRad   = atan(offsetX / distance);
+    double pitchRad = atan(offsetY / distance);
+
+    const double pitch_offset = 9.0;
+
+    YPAngles result;
+    result.yaw   = yawRad   * 180.0 / CV_PI;
+    result.pitch = - pitchRad * 180.0 / CV_PI - pitch_offset;
+    result.distance = distance * 100.0; // cm
+    return result;
+}
+
+/* ============================================================
+   获取装甲目标 yaw/pitch
+   ============================================================ */
+YPAngles ArmorPlate::get_target_pitch_yaw()
+{
+    if (armors.empty())
+        return {0,0,0};
+
+    auto c = armors[0].armor.center;
+    auto r = getYawAndPitch(c.x, c.y);
+    r.distance = armors[0].armor_distance;
+    return r;
+}
+
+/* ============================================================
+   locate_armor 核心检测逻辑
+   ============================================================ */
+int ArmorPlate::locate_armor(Mat img)
+{
+    GaussianBlur(img, img, Size(3, 3), 0);
+    split(img, channels);
+
+    // 颜色差分法 (RGB)
+    if (enemy_color == 2) // 红方敌人
+        subtract(channels[2], channels[0], binary);
+    else                  // 蓝方敌人
+        subtract(channels[0], channels[2], binary);
+
+    threshold(binary, binary, 150, 255, THRESH_BINARY);
+    Mat element = getStructuringElement(MORPH_RECT, Size(5, 5));
+    morphologyEx(binary, binary, MORPH_CLOSE, element);
+
+    findContours(binary, light_contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+    light_infos.clear();
+
+    for (auto& contour : light_contours)
+    {
+        float area = contourArea(contour);
+        if (contour.size() < 6 || area < 10) continue;
+
+        RotatedRect light = fitEllipse(contour);
+        adjustRec(light);
+
+        if ((light.size.width / light.size.height) > 0.8) continue;
+
+        if (light.size.width / light.size.height > 1.0 ||
+            area / (light.size.width * light.size.height) < 0.5)
+            continue;
+
+        light.size.width *= 1.1;
+        light.size.height *= 1.1;
+
+        if (light.size.height > 10 && light.size.height < 150 &&
+            (light.angle < 45 || light.angle > 135))
+            light_infos.push_back(light);
+    }
+
+    // 无灯条
+    if (light_infos.size() < 2)
+    {
+        armors.clear();
+        return 0;
+    }
+
+    sort(light_infos.begin(), light_infos.end(),
+        [](auto& a, auto& b) { return a.center.x < b.center.x; });
+
+    armors.clear();
+
+    for (int i = 0; i < (int)light_infos.size(); i++)
+    {
+        for (int j = i+1; j < (int)light_infos.size(); j++)
+        {
+            auto& left  = light_infos[i];
+            auto& right = light_infos[j];
+
+            float heightDiff = fabs(left.size.height - right.size.height);
+            float widthDiff  = fabs(left.size.width  - right.size.width);
+            float angleDiff  = fabs(left.angle - right.angle);
+            float dis = norm(left.center - right.center);
+            float meanh = (left.size.height + right.size.height) / 2;
+            float yDiffRatio = fabs(left.center.y - right.center.y) / meanh;
+            float xDiffRatio = fabs(left.center.x - right.center.x) / meanh;
+            float ratio = dis / meanh;
+
+            if (angleDiff > 10 || xDiffRatio < 0.5 || yDiffRatio > 0.7
+                || ratio > 3 || ratio < 1)
+                continue;
+
+            ArmorObj obj;
+            vector<Point2f> edges;
+            edges.push_back(right.center - left.center);
+
+            float len = meanh;
+            float ang = (left.angle + right.angle + 180) / 360 * CV_PI;
+            edges.push_back(Point2f(len*cos(ang), len*sin(ang)));
+
+            obj.edge_vec = edges;
+            armor_rect.center = (left.center + right.center) * 0.5;
+            armor_rect.angle  = (left.angle + right.angle) * 0.5;
+            armor_rect.size.height = meanh;
+            armor_rect.size.width  = dis;
+            obj.armor = armor_rect;
+
+            const float WH_ratio = 1.98;
+            const double dist_coe = 237;
+            auto rec = recoverRectangleParameters(
+                WH_ratio,
+                Vec2d(edges[0].x, edges[0].y),
+                Vec2d(edges[1].x, edges[1].y)
+            );
+
+            double absoluteAngle = calculateAbsoluteRotationAngle(rec.rotation);
+            double dist = dist_coe / rec.width;
+
+            obj.armor_distance = dist;
+            armors.push_back(obj);
+        }
+    }
+
+    return armors.size();
+}
+
+
+class ArmorDetectorNode : public rclcpp::Node {
+public:
+    ArmorDetectorNode() : Node("armor_detector_node")
+    {
+        RCLCPP_INFO(this->get_logger(), "ArmorDetectorNode started");
+
+        // 敌方颜色参数
+        this->declare_parameter<int>("enemy_color", 2);
+        int color;
+        this->get_parameter("enemy_color", color);
+        armor_.set_enemy_color(color);
+
+        // 图像订阅
         image_sub_ = image_transport::create_subscription(
             this,
             "/driver/hikvision/my_hik_camera/raw/image",
-            std::bind(&ArmorDetector::imageCallback, this, _1),
+            std::bind(&ArmorDetectorNode::imageCallback, this, _1),
             "raw"
+        );
+
+        // 可选：相机信息订阅
+        camera_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+            "/driver/hikvision/my_hik_camera/info",
+            10,
+            std::bind(&ArmorDetectorNode::cameraInfoCallback, this, _1)
         );
     }
 
 private:
-    void imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr &msg) {
-        cv::Mat frame;
-        try {
-            frame = cv_bridge::toCvShare(msg, "bgr8")->image;
-        } catch (cv_bridge::Exception &e) {
-            RCLCPP_ERROR(this->get_logger(), "cv_bridge error: %s", e.what());
-            return;
-        }
-
-        // 转换到HSV
-        cv::Mat hsv;
-        cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
-
-        // 根据 enemy_color 选择不同阈值(HSV值待定！！)
-        cv::Scalar lower, upper;
-        if (enemy_color_ == "blue") {
-            lower = cv::Scalar(100, 80, 80);
-            upper = cv::Scalar(130, 255, 255);
-        } else if (enemy_color_ == "red") {
-            // 红色分两段，需要两个范围合并
-            cv::Mat mask1, mask2;
-            cv::inRange(hsv, cv::Scalar(0, 80, 80), cv::Scalar(10, 255, 255), mask1);
-            cv::inRange(hsv, cv::Scalar(160, 80, 80), cv::Scalar(180, 255, 255), mask2);
-            cv::bitwise_or(mask1, mask2, mask_);
-        }
-
-        // 若是蓝色，直接 inRange
-        if (enemy_color_ == "blue") {
-            cv::inRange(hsv, lower, upper, mask_);
-        } else if (enemy_color_ != "red") { // 非法颜色，返回全黑图像
-            mask_ = cv::Mat::zeros(frame.size(), CV_8UC1);
-        }
-
-        // 使用形态学操作去除噪声（可选，方法待定！！）
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-        cv::morphologyEx(mask_, mask_, cv::MORPH_CLOSE, kernel);
-
-        // 寻找轮廓
-        std::vector<std::vector<cv::Point>> contours;
-        cv::Mat contour_input = mask_.clone();
-        cv::findContours(contour_input, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-        // 筛选轮廓并拟合最小外接矩形
-        std::vector<cv::RotatedRect> lightbars;
-        lightbars.reserve(contours.size());
-        constexpr int kMaxContourPoints = 10;
-        constexpr double kMinContourArea = 30.0;
-        for (const auto &contour : contours) {
-            // 若轮廓点数超过kMaxContourPoints，跳过(kMaxContourPoints值待定！！)
-            if (contour.size() > kMaxContourPoints) {
-                continue;
-            }
-
-            // 计算该轮廓的实际面积，小于kMinContourArea，跳过(kMinContourArea值待定！！)
-            double area = cv::contourArea(contour);
-            if (area < kMinContourArea) {
-                continue;
-            }
-
-            // 拟合该轮廓的“最小外接矩形”
-            cv::RotatedRect rect = cv::minAreaRect(contour);
-            float width = rect.size.width;
-            float height = rect.size.height;
-
-            // 拟合出的矩形异常（宽或高为0），跳过
-            if (width <= 0 || height <= 0) {
-                continue;
-            }
-
-            // 交换宽高
-            if (width > height) {
-                std::swap(width, height);
-            }
-
-            // 高宽比范围：1.5 < ratio < 15；超出范围，跳过(ratio的范围值待定！！)
-            float aspect_ratio = height / width;
-            if (aspect_ratio < 1.5f || aspect_ratio > 15.0f) {
-                continue;
-            }
-
-            lightbars.emplace_back(rect);
-        }
-
-        // 计算候选装甲板
-        std::vector<cv::RotatedRect> armor_candidates;
-
-        // 统一灯条角度到同一参考方向
-        auto normalized_angle = [](const cv::RotatedRect &rect) {
-            float angle = rect.angle;
-            if (rect.size.width < rect.size.height) {
-                return angle;
-            }
-            return angle + 90.0f;
-        };
-
-        // 两两配对灯条
-        for (size_t i = 0; i < lightbars.size(); ++i) {
-            for (size_t j = i + 1; j < lightbars.size(); ++j) {
-                const auto &rect1 = lightbars[i];
-                const auto &rect2 = lightbars[j];
-
-                const cv::RotatedRect &left = rect1.center.x < rect2.center.x ? rect1 : rect2;
-                const cv::RotatedRect &right = rect1.center.x < rect2.center.x ? rect2 : rect1;
-
-                float height1 = std::max(rect1.size.width, rect1.size.height);
-                float height2 = std::max(rect2.size.width, rect2.size.height);
-                float height_ratio = height1 > height2 ? height1 / height2 : height2 / height1;
-
-                // 两条灯条的高度不能相差超过 1.5 倍(ratio的值待定！！)
-                if (height_ratio > 1.5f) {
-                    continue;
-                }
-                
-                // 两灯条方向差 ≤ 15°(ratio的值待定！！)
-                float angle_diff = std::fabs(normalized_angle(rect1) - normalized_angle(rect2));
-                if (angle_diff > 90.0f) {
-                    angle_diff = 180.0f - angle_diff;
-                }
-                if (angle_diff > 15.0f) {
-                    continue;
-                }
-
-                // 计算两个灯条中心之间的距离，与它们的平均高度作比例（0.5 < 距离/高度 < 4.0）(ratio的范围值待定！！)
-                float center_distance = static_cast<float>(cv::norm(rect1.center - rect2.center));
-                float avg_height = (height1 + height2) / 2.0f;
-                float distance_ratio = center_distance / avg_height;
-                if (distance_ratio < 0.5f || distance_ratio > 4.0f) {
-                    continue;
-                }
-
-                // 比较两个灯条中心在竖直方向的差距（上下差距 < 0.8 × 平均高度）(ratio的范围值待定！！)
-                float vertical_diff = std::fabs(rect1.center.y - rect2.center.y);
-                if (vertical_diff > avg_height * 0.8f) {
-                    continue;
-                }
-
-                // 组合两个灯条的角点用于拟合装甲板
-                cv::Point2f left_pts[4];
-                cv::Point2f right_pts[4];
-                left.points(left_pts);
-                right.points(right_pts);
-
-                std::vector<cv::Point2f> all_points;
-                all_points.reserve(8);
-                all_points.insert(all_points.end(), left_pts, left_pts + 4);
-                all_points.insert(all_points.end(), right_pts, right_pts + 4);
-
-                armor_candidates.emplace_back(cv::minAreaRect(all_points));
-            }
-        }
-
-        // 可视化灯条与装甲板候选
-        cv::Mat visual = frame.clone();
-        for (const auto &rect : lightbars) {
-            cv::Point2f pts[4];
-            rect.points(pts);
-            for (int i = 0; i < 4; ++i) {
-                cv::line(visual, pts[i], pts[(i + 1) % 4], cv::Scalar(0, 255, 255), 1);
-            }
-        }
-
-        for (const auto &rect : armor_candidates) {
-            cv::Point2f pts[4];
-            rect.points(pts);
-            for (int i = 0; i < 4; ++i) {
-                cv::line(visual, pts[i], pts[(i + 1) % 4], cv::Scalar(0, 0, 255), 2);
-            }
-        }
-
-        cv::imshow("mask", mask_);
-        cv::imshow("armor_detection", visual);
-        cv::waitKey(1);
+    void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg)
+    {
+        (void)msg; // 当前未使用
     }
 
-    std::string enemy_color_;
-    cv::Mat mask_;
+    void imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr &msg)
+    {
+        auto cv_ptr = cv_bridge::toCvCopy(msg, "bgr8");
+        Mat frame = cv_ptr->image;
+
+        int armor_count = armor_.locate_armor(frame);
+
+        Mat mask_gray = armor_.getBinary().clone();
+        if (mask_gray.empty()) mask_gray = Mat::zeros(frame.size(), CV_8UC1);
+
+        Mat mask_color;
+        cvtColor(mask_gray, mask_color, COLOR_GRAY2BGR);
+
+        Mat combined;
+        hconcat(mask_color, frame, combined);
+
+        YPAngles yp = armor_.get_target_pitch_yaw();
+        string info1 = "Lights: " + std::to_string((int)armor_.getLightCount());
+        string info2 = "Armors: " + std::to_string(armor_count);
+        string info3 = "Yaw=" + std::to_string((int)yp.yaw) +
+                       "  Pitch=" + std::to_string((int)yp.pitch) +
+                       "  Dist=" + std::to_string((int)yp.distance) + "cm";
+
+        putText(combined, info1, Point(20, 40), FONT_HERSHEY_SIMPLEX, 1.0, Scalar(0,255,0), 2);
+        putText(combined, info2, Point(20, 80), FONT_HERSHEY_SIMPLEX, 1.0, Scalar(0,255,0), 2);
+        putText(combined, info3, Point(20, 120), FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255,255,0), 2);
+
+        Mat display;
+        resize(combined, display, Size(), 0.6, 0.6);
+        imshow("Armor Detection Combined", display);
+        waitKey(1);
+    }
+
+    ArmorPlate armor_;
     image_transport::Subscriber image_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
 };
 
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<ArmorDetector>());
+    rclcpp::spin(std::make_shared<ArmorDetectorNode>());
     rclcpp::shutdown();
     return 0;
 }
