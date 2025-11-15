@@ -1,0 +1,16 @@
+/home/wele/robomaster_auto_aim/src/install/armor_detector/lib/armor_detector/armor_detector_node
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/ament_index/resource_index/package_run_dependencies/armor_detector
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/ament_index/resource_index/parent_prefix_path/armor_detector
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/environment/ament_prefix_path.sh
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/environment/ament_prefix_path.dsv
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/environment/path.sh
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/environment/path.dsv
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/local_setup.bash
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/local_setup.sh
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/local_setup.zsh
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/local_setup.dsv
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/package.dsv
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/ament_index/resource_index/packages/armor_detector
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/cmake/armor_detectorConfig.cmake
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/cmake/armor_detectorConfig-version.cmake
+/home/wele/robomaster_auto_aim/src/install/armor_detector/share/armor_detector/package.xml

@@ -1,0 +1,6 @@
+Invoking command in '/home/wele/robomaster_auto_aim/src/build/armor_detector': /usr/bin/cmake /home/wele/robomaster_auto_aim/src/armor_detector -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCMAKE_INSTALL_PREFIX=/home/wele/robomaster_auto_aim/src/install/armor_detector
+Invoked command in '/home/wele/robomaster_auto_aim/src/build/armor_detector' returned '0': /usr/bin/cmake /home/wele/robomaster_auto_aim/src/armor_detector -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCMAKE_INSTALL_PREFIX=/home/wele/robomaster_auto_aim/src/install/armor_detector
+Invoking command in '/home/wele/robomaster_auto_aim/src/build/armor_detector': /usr/bin/cmake --build /home/wele/robomaster_auto_aim/src/build/armor_detector -- -j12 -l12
+Invoked command in '/home/wele/robomaster_auto_aim/src/build/armor_detector' returned '0': /usr/bin/cmake --build /home/wele/robomaster_auto_aim/src/build/armor_detector -- -j12 -l12
+Invoking command in '/home/wele/robomaster_auto_aim/src/build/armor_detector': /usr/bin/cmake --install /home/wele/robomaster_auto_aim/src/build/armor_detector
+Invoked command in '/home/wele/robomaster_auto_aim/src/build/armor_detector' returned '0': /usr/bin/cmake --install /home/wele/robomaster_auto_aim/src/build/armor_detector

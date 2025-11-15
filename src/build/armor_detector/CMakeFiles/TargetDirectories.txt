@@ -1,0 +1,10 @@
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/uninstall.dir
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/armor_detector_uninstall.dir
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/armor_detector_node.dir
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/test.dir
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/edit_cache.dir
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/rebuild_cache.dir
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/list_install_components.dir
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/install.dir
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/install/local.dir
+/home/wele/robomaster_auto_aim/src/build/armor_detector/CMakeFiles/install/strip.dir
